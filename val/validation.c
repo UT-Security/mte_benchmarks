@@ -2,6 +2,7 @@
 #include "sha256.h"
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 // testmte = 1: Test oob access does not work with MTE. Expect result: crush if MTE is enabled.
 // testmte = 2: Test memory tag after madvice. Expected result: madvice clears memory tagging.
@@ -54,27 +55,38 @@ int test_mte(int testmte){
             
 }
 
-void bench_no_mte(int buffer_size, int workload, int setup_teardown, int iteration){
+void bench_no_mte(uint64_t buffer_size, int workload, int setup_teardown, int iteration, int workload_iteration){
     double elapsed_time = 0;
     struct timeval start, end;
 
     unsigned char * buffer = NULL;
-
+    unsigned char * ctx = NULL;
+    unsigned char* digest = NULL;
+    unsigned char* indices = NULL;
+    
     MEASURE_TIME(
         buffer = mmap_option(-1, buffer_size);
         mprotect_option(0, buffer, buffer_size);
+        ctx = mmap_option(-1, sizeof(SHA256_CTX));
+        mprotect_option(0, ctx, sizeof(SHA256_CTX));
+        digest = mmap_option(-1, SHA256_BLOCK_SIZE);
+        mprotect_option(0, digest, SHA256_BLOCK_SIZE);
+        indices = mmap_option(-1, buffer_size*sizeof(uint64_t));
+        mprotect_option(0, indices, buffer_size*sizeof(uint64_t));
         , 
         "Setup"
     );
 
     // Init some variables
     uint64_t** buffer_8;
-    int buffer_size_8 = buffer_size/8;
-
+    uint64_t buffer_size_8 = buffer_size/8;
     if(setup_teardown==1){
 
         MEASURE_TIME(
             int ret = madvise(buffer, buffer_size, MADV_DONTNEED);
+            ret |= madvise(ctx, sizeof(SHA256_CTX), MADV_DONTNEED);
+            ret |= madvise(digest, SHA256_BLOCK_SIZE, MADV_DONTNEED);
+            ret |= madvise(indices, buffer_size*sizeof(uint64_t), MADV_DONTNEED);
             if (ret != 0) {
                 perror("madvise failed");
                 exit(EXIT_FAILURE);
@@ -87,32 +99,77 @@ void bench_no_mte(int buffer_size, int workload, int setup_teardown, int iterati
 
         for (int i = 0; i < iteration; i++){
             if(workload==0){
+                buffer_8 = (uint64_t**)buffer;
+                create_random_chain((uint64_t*)indices, buffer_size_8, buffer_8);
+
                 MEASURE_TIME(
                     // Fill buffer with pointers chasing
-                    buffer_8 = (uint64_t**)buffer;
-                    create_random_chain(buffer_size_8, buffer_8);
+                    read_write_random_order((uint64_t*)indices, buffer_size_8, buffer_8, workload_iteration);
                     , 
-                    "Fill buffer with pointer chasing"
+                    "Read after write random order: Fill buffer with pointer chasing"
                 );
                     
                 MEASURE_TIME(
-                    chase_pointers(buffer_8, buffer_size_8);
+                    read_read_dependency(buffer_8, buffer_size_8, workload_iteration);
                     , 
-                    "Access"
+                    "Read after read with dependency random order: chase pointer"
+                );
+
+                MEASURE_TIME(
+                    write_random_order((uint64_t*)indices, (uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Write after write random order"
+                );
+
+                MEASURE_TIME(
+                    read_random_order((uint64_t*)indices, (uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Read after read random order"
+                );
+                
+                MEASURE_TIME(
+                    store_load_random_order((uint64_t*)indices, (uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "store load read random order with dependency"
+                );
+
+                MEASURE_TIME(
+                    write_read_random_order((uint64_t*)indices, (uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Write after read random order"
+                );
+
+                MEASURE_TIME(
+                    read_seq_only((uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Read after read sequential order"
+                );
+
+                MEASURE_TIME(
+                    write_seq_only((uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Write after write sequential order"
+                );
+
+                MEASURE_TIME(
+                    read_write_seq_only((uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Read after write sequential order"
                 );
             }else if(workload==1){
                 MEASURE_TIME(
                     memset(buffer, 1, buffer_size);
-                    unsigned char digest[SHA256_BLOCK_SIZE];
-                    sha256(buffer, buffer_size, digest);
+                    sha256_ctx((SHA256_CTX*)ctx, buffer, buffer_size, digest, workload_iteration);
                     , 
                     "Memset and Hash"
                 );
             }
-            
 
             MEASURE_TIME(
                 int ret = madvise(buffer, buffer_size, MADV_DONTNEED);
+                ret |= madvise(ctx, sizeof(SHA256_CTX), MADV_DONTNEED);
+                ret |= madvise(digest, SHA256_BLOCK_SIZE, MADV_DONTNEED);
+                ret |= madvise(indices, buffer_size*sizeof(uint64_t), MADV_DONTNEED);
                 if (ret != 0) {
                     perror("madvise failed");
                     exit(EXIT_FAILURE);
@@ -125,19 +182,31 @@ void bench_no_mte(int buffer_size, int workload, int setup_teardown, int iterati
     }
 
     munmap(buffer, buffer_size);
+    munmap(ctx, sizeof(SHA256_CTX));
+    munmap(digest, SHA256_BLOCK_SIZE);
+    munmap(indices, buffer_size*sizeof(uint64_t));
 }
 
 
 
-void bench_mte(int buffer_size, int workload, int setup_teardown, int iteration){
+void bench_mte(uint64_t buffer_size, int workload, int setup_teardown, int iteration, int workload_iteration){
     double elapsed_time = 0;
     struct timeval start, end;
 
     unsigned char * buffer = NULL;
+    unsigned char * indices = NULL;
+    unsigned char * ctx = NULL;
+    unsigned char* digest = NULL;
 
     MEASURE_TIME(
         buffer = mmap_option(-1, buffer_size);
+        ctx = mmap_option(-1, sizeof(SHA256_CTX));
+        digest = mmap_option(-1, SHA256_BLOCK_SIZE);
+        indices = mmap_option(-1, buffer_size*sizeof(uint64_t));
         mprotect_option(1, buffer, buffer_size);
+        mprotect_option(1, ctx, sizeof(SHA256_CTX));
+        mprotect_option(1, digest, SHA256_BLOCK_SIZE);
+        mprotect_option(1, indices, buffer_size*sizeof(uint64_t));
         , 
         "Setup with MTE"
     );
@@ -146,21 +215,40 @@ void bench_mte(int buffer_size, int workload, int setup_teardown, int iteration)
     unsigned long long curr_key = (unsigned long long) (1);
     unsigned char *buffer_tag;
     uint64_t** buffer_8;
-    int buffer_size_8 = buffer_size/8;
+    uint64_t buffer_size_8 = buffer_size/8;
+
+    unsigned char *ctx_tag = ctx;
+    unsigned char *digest_tag = digest;
+    unsigned char *indices_tag = indices;
 
     if(setup_teardown==1){
         
         MEASURE_TIME(
             buffer_tag = mte_tag(buffer, curr_key, 0);
-            for (int j = 16; j < buffer_size; j += (size_t) 16){
+            for (uint64_t j = 16; j < buffer_size; j += 16){
                 mte_tag(buffer+j, curr_key, 0);
             }
+            ctx_tag = mte_tag(ctx, curr_key, 0);
+            for (uint64_t j = 16; j < sizeof(SHA256_CTX); j += 16){
+                mte_tag(ctx+j, curr_key, 0);
+            }
+            digest_tag = mte_tag(digest, curr_key, 0);
+            for (uint64_t j = 16; j < SHA256_BLOCK_SIZE; j += 16){
+                mte_tag(digest+j, curr_key, 0);
+            }
+            indices_tag = mte_tag(indices, curr_key, 0);
+            for (uint64_t j = 16; j < buffer_size*sizeof(uint64_t); j += 16){
+                mte_tag(indices+j, curr_key, 0);
+            }          
             , 
             "Apply MTE Tag"
         );
 
         MEASURE_TIME(
             int ret = madvise(buffer_tag, buffer_size, MADV_DONTNEED);
+            ret |= madvise(ctx_tag, sizeof(SHA256_CTX), MADV_DONTNEED);
+            ret |= madvise(digest_tag, SHA256_BLOCK_SIZE, MADV_DONTNEED);
+            ret |= madvise(indices_tag, buffer_size*sizeof(uint64_t), MADV_DONTNEED);
             if (ret != 0) {
                 perror("madvise failed");
                 exit(EXIT_FAILURE);
@@ -171,44 +259,100 @@ void bench_mte(int buffer_size, int workload, int setup_teardown, int iteration)
 
     }else{
 
-        for (int i = 0; i < iteration; i++)
-        {
+        for (int i = 0; i < iteration; i++){
             
             MEASURE_TIME(
                 buffer_tag = mte_tag(buffer, curr_key, 0);
-                for (int j = 16; j < buffer_size; j += (size_t) 16){
+                for (uint64_t j = 16; j < buffer_size; j += 16){
                     mte_tag(buffer+j, curr_key, 0);
                 }
+                ctx_tag = mte_tag(ctx, curr_key, 0);
+                for (uint64_t j = 16; j < sizeof(SHA256_CTX); j += 16){
+                    mte_tag(ctx+j, curr_key, 0);
+                }
+                digest_tag = mte_tag(digest, curr_key, 0);
+                for (uint64_t j = 16; j < SHA256_BLOCK_SIZE; j += 16){
+                    mte_tag(digest+j, curr_key, 0);
+                }
+                indices_tag = mte_tag(indices, curr_key, 0);
+                for (uint64_t j = 16; j < buffer_size*sizeof(uint64_t); j += 16){
+                    mte_tag(indices+j, curr_key, 0);
+                } 
                 , 
                 "Apply MTE Tag"
             );
 
-            if(workload==0){
+            if( workload==0 ){
+                buffer_8 = (uint64_t**)buffer_tag;
+                create_random_chain((uint64_t*)indices_tag, buffer_size_8, buffer_8);
+
                 MEASURE_TIME(
                     // Fill buffer with pointers chasing
-                    buffer_8 = (uint64_t**)buffer_tag;
-                    create_random_chain(buffer_size_8, buffer_8);
+                    read_write_random_order((uint64_t*)indices_tag, buffer_size_8, buffer_8, workload_iteration);
                     , 
-                    "Fill buffer with pointer chasing"
+                    "Read after write random order: Fill buffer with pointer chasing"
                 );
 
                 MEASURE_TIME(
-                    chase_pointers((uint64_t**)buffer_tag, buffer_size_8);
+                    read_read_dependency((uint64_t**)buffer_tag, buffer_size_8, workload_iteration);
                     , 
-                    "Access with MTE"
+                    "Read after read with dependency random order: chase pointer with MTE"
+                );
+
+                MEASURE_TIME(
+                    write_random_order((uint64_t*)indices_tag, (uint64_t*)buffer_tag, buffer_size_8, workload_iteration);
+                    , 
+                    "Write after write random order with MTE"
+                );
+
+                MEASURE_TIME(
+                    read_random_order((uint64_t*)indices_tag, (uint64_t*)buffer_tag, buffer_size_8, workload_iteration);
+                    , 
+                    "Read after read random order with MTE"
+                );
+
+                MEASURE_TIME(
+                    store_load_random_order((uint64_t*)indices_tag, (uint64_t*)buffer_tag, buffer_size_8, workload_iteration);
+                    , 
+                    "store after load random order with dependency with MTE"
+                );
+
+                MEASURE_TIME(
+                    write_read_random_order((uint64_t*)indices_tag, (uint64_t*)buffer_tag, buffer_size_8, workload_iteration);
+                    , 
+                    "Write after read random order with MTE"
+                );
+                MEASURE_TIME(
+                    read_seq_only((uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Read after read sequential order"
+                );
+
+                MEASURE_TIME(
+                    write_seq_only((uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Write after write sequential order"
+                );
+
+                MEASURE_TIME(
+                    read_write_seq_only((uint64_t*)buffer_8, buffer_size_8, workload_iteration);
+                    , 
+                    "Read after write sequential order"
                 );
             }else if(workload==1){
                 MEASURE_TIME(
                     memset(buffer_tag, 1, buffer_size);
-                    unsigned char digest[SHA256_BLOCK_SIZE];
-                    sha256(buffer_tag, buffer_size, digest);
+                    sha256_ctx((SHA256_CTX*)ctx_tag, buffer_tag, buffer_size, digest_tag, workload_iteration);
                     , 
-                    "Memset and Hash with MTE"
+                    "Memset and Hash"
                 );
             }
 
             MEASURE_TIME(
                 int ret = madvise(buffer_tag, buffer_size, MADV_DONTNEED);
+                ret |= madvise((SHA256_CTX*)ctx_tag, sizeof(SHA256_CTX), MADV_DONTNEED);
+                ret |= madvise(digest_tag, SHA256_BLOCK_SIZE, MADV_DONTNEED);
+                ret |= madvise(indices_tag, buffer_size*sizeof(uint64_t), MADV_DONTNEED);
                 if (ret != 0) {
                     perror("madvise failed");
                     exit(EXIT_FAILURE);
@@ -220,21 +364,28 @@ void bench_mte(int buffer_size, int workload, int setup_teardown, int iteration)
     }
 
     munmap(buffer, buffer_size);
+    munmap(ctx, sizeof(SHA256_CTX));
+    munmap(digest, SHA256_BLOCK_SIZE);
+    munmap(indices, buffer_size*sizeof(uint64_t));
+
 }
 
 int main(int argc, char *argv[])
 {
 	
     int testmte = atoi(argv[1]);
-    int buffer_size = atoi(argv[2]);
+    int size = atoi(argv[2]);
     int setup_teardown = atoi(argv[3]);
     int workload = atoi(argv[4]);
-    int iteration = atoi(argv[5]);
+    int workload_iteration = atoi(argv[5]);
+    int iteration = atoi(argv[6]);
 
+    uint64_t buffer_size = size*1024; // KB*size 
     printf("testmte %d\n", testmte);
-    printf("buffer_size %d\n", buffer_size);
+    printf("buffer_size %" PRIu64 "\n", buffer_size);
     printf("setup_teardown %d\n", setup_teardown);
     printf("workload %d\n", workload);
+    printf("workload_iteration %d\n", workload_iteration);
     printf("iteration %d\n", iteration);
 
     if(buffer_size%16!=0){
@@ -245,27 +396,27 @@ int main(int argc, char *argv[])
     pin_cpu(0);
 
     // Initialize MTE
-    init_mte();
+    init_mte(testmte);
 
     if(testmte > 0){ // we want to test MTE works without benchmark anything
         test_mte(testmte);
         return 0;
-    }else if(testmte == 0){ // benchmark mte behavior
+    }else if( (testmte == 0) || (testmte == -1)){ // benchmark mte behavior
         if(setup_teardown==1){
             for (int i = 0; i < iteration; i++){
-                bench_mte(buffer_size, workload, setup_teardown, iteration);
+                bench_mte(buffer_size, workload, setup_teardown, iteration, workload_iteration);
             }
         }else{
-            bench_mte(buffer_size, workload, setup_teardown, iteration);
+            bench_mte(buffer_size, workload, setup_teardown, iteration, workload_iteration);
         }
         
-    }else if(testmte == -1){ // benchmark no mte behavior
+    }else if(testmte == -2){ // benchmark no mte behavior
         if(setup_teardown==1){
             for (int i = 0; i < iteration; i++){
-                bench_no_mte(buffer_size, workload, setup_teardown, iteration);
+                bench_no_mte(buffer_size, workload, setup_teardown, iteration, workload_iteration);
             }
         }else{
-            bench_no_mte(buffer_size, workload, setup_teardown, iteration);
+            bench_no_mte(buffer_size, workload, setup_teardown, iteration, workload_iteration);
         }
     }
 

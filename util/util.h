@@ -48,22 +48,38 @@ do { \
         printf("%s time is %f us\n", header_str, elapsed_time); \
 } while (0)
 
+#define FORCE_READ_INT(var) __asm__("" ::"r"(var));
 
 void pin_cpu(size_t core_ID);
 
-int init_mte();
+int init_mte(int testmte);
 
-unsigned char * mmap_option(int mte, int size);
+unsigned char * mmap_option(int mte, uint64_t size);
 
-void mprotect_option(int mte, unsigned char * ptr, int size);
+void mprotect_option(int mte, unsigned char * ptr, uint64_t size);
 
 unsigned char * mte_tag(unsigned char *ptr, unsigned long long tag, int random);
 
-void create_random_chain(int len, uint64_t** ptr);
+void create_random_chain(uint64_t* indices, uint64_t len, uint64_t** ptr);
 
-void chase_pointers(uint64_t** ptr, int count);
+void read_write_random_order(uint64_t* indices, uint64_t len, uint64_t** ptr, int workload_iter);
 
-void sha256(const unsigned char * str, int size, unsigned char hash[]);
+void read_read_dependency(uint64_t** ptr, uint64_t count, int workload_iter);
 
+void write_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter);
+
+void read_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter);
+
+void store_load_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter);
+
+void write_read_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter);
+
+void sha256_ctx(SHA256_CTX* ctx, const unsigned char * str, uint64_t size, unsigned char hash[], int workload_iter);
+
+void read_seq_only(uint64_t* ptr, uint64_t size, int workload_iter);
+
+void write_seq_only(uint64_t* ptr, uint64_t size, int workload_iter);
+
+void read_write_seq_only(uint64_t* ptr, uint64_t size, int workload_iter);
 
 #endif
