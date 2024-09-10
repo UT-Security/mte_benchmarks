@@ -1,11 +1,29 @@
+
+# Compiler and flags
 CC := clang
-CFLAGS := -v -target aarch64-linux-gnu -march=armv8.5-a+memtag -static -O0 -I../util/ 
+CFLAGS := -v -target aarch64-linux-gnu -march=armv8.5-a+memtag -static -O0 -I../util/
+
+# Source files
 SRC := validation.c
 UTIL_SRC := ../util/util.c ../util/sha256.c
+# Object files
+OBJS := $(SRC:.c=.o) $(UTIL_SRC:.c=.o)
 
-validation: $(SRC) $(UTIL_SRC)
-	$(CC) $(CFLAGS) -o validation $(SRC) $(UTIL_SRC) 
+# Target executable
+TARGET := validation
 
+# Default target
+all: $(TARGET)
+
+# Linking step
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS)
+
+# Compilation step for each .c file
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Clean up build files
 .PHONY: clean
 clean:
-	rm -f validation
+	rm -f $(OBJS) $(TARGET)

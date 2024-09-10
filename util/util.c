@@ -103,7 +103,7 @@ unsigned char * mte_tag(unsigned char *ptr, unsigned long long tag, int random){
 /* create a cyclic pointer chain that covers all words
    in a memory section of the given size in a randomized order */
 // Inspired by: https://github.com/afborchert/pointer-chasing/blob/master/random-chase.cpp
-void create_random_chain(uint64_t* indices, uint64_t len, uint64_t** ptr) {
+void create_random_chain(uint64_t* indices, uint64_t len) {
     // shuffle indices
     for (uint64_t i = 0; i < len; ++i) {
         indices[i] = i;
@@ -168,15 +168,8 @@ void store_load_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, i
             ptr[indices[i+1]] = ptr[indices[i]] + i + j;
         }
     }
-    
-    
-    // for(int j = 0; j<workload_iter; j++){
-    //     for (uint64_t i = 0; i < count; i++) {
-    //         ptr[indices[i]] = ptr[indices[i]] + i + j;
-    //         ptr[indices[i+1]] = ptr[indices[i]];
-    //     }
-    // }
 }
+
 
 // write after read: dependency
 void write_read_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter) {
@@ -225,3 +218,48 @@ void read_write_seq_only(uint64_t* ptr, uint64_t size, int workload_iter){
     }
 }
 
+// get_physical_addr function from https://github.com/IAIK/flipfloyd
+uint64_t get_physical_addr(uint64_t virtual_addr){
+	int g_pagemap_fd = -1;
+	uint64_t value;
+
+	// open the pagemap
+	if(g_pagemap_fd == -1) {
+	  g_pagemap_fd = open("/proc/self/pagemap", O_RDONLY);
+	}
+	if(g_pagemap_fd == -1) return 0;
+
+	// read physical address
+	off_t offset = (virtual_addr / 4096) * sizeof(value);
+	int got = pread(g_pagemap_fd, &value, sizeof(value), offset);
+	if(got != 8) return 0;
+
+	// Check the "page present" flag.
+	if(!(value & (1ULL << 63))) return 0;
+
+	// return physical address
+	uint64_t frame_num = value & ((1ULL << 55) - 1);
+	return (frame_num * 4096) | (virtual_addr & (4095));
+}
+
+static int fddev = -1;
+void init(void)
+{
+	static struct perf_event_attr attr;
+	attr.type = PERF_TYPE_HARDWARE;
+	attr.config = PERF_COUNT_HW_CPU_CYCLES;
+	fddev = syscall(__NR_perf_event_open, &attr, 0, -1, -1, 0);
+}
+
+void fini(void)
+{
+	close(fddev);
+}
+
+long long
+cpucycles(void)
+{
+	long long result = 0;
+	if (read(fddev, &result, sizeof(result)) < sizeof(result)) return 0;
+	return result;
+}

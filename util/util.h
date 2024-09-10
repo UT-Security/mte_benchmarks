@@ -14,6 +14,14 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include "sha256.h"
+#include <fcntl.h>			// For O_RDONLY in get_physical_addr fn 
+
+/** compile with -std=gnu99 */
+#include <stdint.h>
+#include <sys/types.h>
+#include <sys/syscall.h>
+#include <linux/perf_event.h>
+
 
 // For MTE
 #define PROT_MTE                 0x20
@@ -50,6 +58,14 @@ do { \
 
 #define FORCE_READ_INT(var) __asm__("" ::"r"(var));
 
+#define INST_SYNC asm volatile("ISB")
+#define DATA_SYNC asm volatile("DSB SY")
+
+#define MEM_BARRIER \
+	DATA_SYNC;      \
+	INST_SYNC
+
+
 void pin_cpu(size_t core_ID);
 
 int init_mte(int testmte);
@@ -60,7 +76,7 @@ void mprotect_option(int mte, unsigned char * ptr, uint64_t size);
 
 unsigned char * mte_tag(unsigned char *ptr, unsigned long long tag, int random);
 
-void create_random_chain(uint64_t* indices, uint64_t len, uint64_t** ptr);
+void create_random_chain(uint64_t* indices, uint64_t len);
 
 void read_write_random_order(uint64_t* indices, uint64_t len, uint64_t** ptr, int workload_iter);
 
@@ -81,5 +97,19 @@ void read_seq_only(uint64_t* ptr, uint64_t size, int workload_iter);
 void write_seq_only(uint64_t* ptr, uint64_t size, int workload_iter);
 
 void read_write_seq_only(uint64_t* ptr, uint64_t size, int workload_iter);
+
+uint64_t get_physical_addr(uint64_t virtual_addr);
+
+static inline void
+arm_clean_va_to_poc(void const *p __attribute__((unused)))
+{
+	asm volatile("dc cvac, %0" : : "r" (p) : "memory");
+}
+
+void init(void);
+
+void fini(void);
+
+long long cpucycles(void);
 
 #endif
