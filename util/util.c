@@ -161,7 +161,7 @@ void read_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int wor
     }
 }
 
-// read after write: no dependency
+// read after write: dependency
 void store_load_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter) {
     for(int j = 0; j<workload_iter; j++){
         for (uint64_t i = 0; i < count-1; i++) {
@@ -175,9 +175,9 @@ void store_load_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, i
 void write_read_random_order(uint64_t* indices, uint64_t* ptr, uint64_t count, int workload_iter) {
     for(int j = 0; j<workload_iter; j++){
         for (uint64_t i = 1; i < count; ++i) {
-            ptr[indices[i-1]] = ptr[indices[i-1]]+(uint64_t)i+j;  
+            ptr[indices[i-1]] = ptr[indices[i]]+(uint64_t)i+j;  
         }
-        ptr[indices[count-1]] = ptr[indices[count-1]]+(uint64_t)count-1+j;
+        //ptr[indices[count-1]] = ptr[indices[count-1]]+(uint64_t)count-1+j;
     }
 }
 
