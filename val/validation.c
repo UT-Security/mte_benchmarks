@@ -18,8 +18,8 @@ int test_mte(int testmte){
         temp2 = mmap_option(1, page_size);
         printf("temp1: %p\n", temp1);
         printf("temp2: %p\n", temp2);
-        unsigned long long curr_key1 = (unsigned long long) (1);
-        unsigned long long curr_key2 = (unsigned long long) (2);
+        unsigned long long curr_key1 = (unsigned long long) (0);
+        unsigned long long curr_key2 = (unsigned long long) (0);
         temp1 = mte_tag(temp1, curr_key1, 0);
         temp2 = mte_tag(temp2, curr_key2, 0);
         printf("temp1 after tag: %p\n", temp1);
@@ -139,7 +139,7 @@ void bench_no_mte(uint64_t buffer_size, int workload, int setup_teardown, int it
                 MEASURE_TIME(
                     write_read_random_order((uint64_t*)indices, (uint64_t*)buffer_8, buffer_size_8, workload_iteration);
                     , 
-                    "Write after read to random memory location no dependency"
+                    "Write after read to random memory location with dependency"
                 );
 
                 MEASURE_TIME(
@@ -317,7 +317,7 @@ void bench_mte(uint64_t buffer_size, int workload, int setup_teardown, int itera
                 MEASURE_TIME(
                     write_read_random_order((uint64_t*)indices_tag, (uint64_t*)buffer_tag, buffer_size_8, workload_iteration);
                     , 
-                    "MTE: Write after read to random memory location no dependency"
+                    "MTE: Write after read to random memory location with dependency"
                 );
 
                 MEASURE_TIME(

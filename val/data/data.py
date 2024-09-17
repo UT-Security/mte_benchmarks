@@ -5,63 +5,61 @@ def read_file(fn):
     data = {}
     data[0] = {}
     data[-1] = {}
+    data[-2] = {}
     size = 0
     test_mte = 0
+    cpu = 0
     with open(fn) as f:
         for line in f:
             if("testmte" in line):
                 test_mte = int(line.strip().split()[1])
             elif("buffer_size" in line):
                 size = int(line.strip().split()[1])
-                data[test_mte][size] = {}
-            elif("Setup" in line):
+                if(size not in data[test_mte]):
+                    data[test_mte][size] = {}
+            elif("Pin to CPU" in line):
+                cpu = int(line.strip().split()[3])
+                data[test_mte][size][cpu] = {}
+            elif("Read after read to random memory location with dependency" in line):
                 curr = float(line.strip().split()[-2])
-                data[test_mte][size].setdefault("Setup", []).append(int(curr))
-            elif("Apply MTE" in line):
+                data[test_mte][size][cpu].setdefault("RR-Random-Dep", []).append(int(curr))
+            elif("Write after write to random memory location no dependency" in line):
                 curr = float(line.strip().split()[-2])
-                data[test_mte][size].setdefault("ApplyMTE", []).append(int(curr))
-            elif("Fill buffer" in line):
+                data[test_mte][size][cpu].setdefault("WW-Random-noDep", []).append(int(curr))
+            elif("Read after read to random memory location no dependency" in line):
                 curr = float(line.strip().split()[-2])
-                data[test_mte][size].setdefault("FillBufferPC", []).append(int(curr))
-            elif("Access" in line):
+                data[test_mte][size][cpu].setdefault("RR-Random-noDep", []).append(int(curr))
+            elif("store to load forwarding" in line):
                 curr = float(line.strip().split()[-2])
-                data[test_mte][size].setdefault("Access", []).append(int(curr))
-            elif("Memset" in line):
+                data[test_mte][size][cpu].setdefault("Store-to-Load", []).append(int(curr))
+            elif("Write after read to random memory location with dependency" in line):
                 curr = float(line.strip().split()[-2])
-                data[test_mte][size].setdefault("Memset", []).append(int(curr))
-            elif("Tear down" in line):
-                curr = float(line.strip().split()[-2])
-                data[test_mte][size].setdefault("TearDown", []).append(int(curr))
+                data[test_mte][size][cpu].setdefault("RW-Random-Dep", []).append(int(curr))
     f.close()
     return data
 
-def plot(data, name, exp):
+def plot(data, cpu, size):
 
-    mte = []
-    no_mte = []
-    size = []
-    for s in data[0]:
-        size.append(s)
-        mte.append(np.mean(data[0][s][name][10:]))
+    sync_mte = {}
+    async_mte = {}
+    no_mte = {}
     
-    plot_no_mte = 0
-    for s in data[-1]:
-        if(name in data[-1][s]):
-            plot_no_mte = 1
-            no_mte.append(np.mean(data[-1][s][name][10:]))
-        
+    for s in data[0][size][cpu]:
+        sync_mte[s] = (np.mean(data[0][size][cpu][s]), np.std(data[0][size][cpu][s]))
+    
+    for s in data[-1][size][cpu]:
+        async_mte[s] = (np.mean(data[-1][size][cpu][s]), np.std(data[-1][size][cpu][s]))
 
-    plt.figure(figsize=(3, 2))  # 6.4, 4.8
-    plt.xscale('log')
-    plt.xlabel('size(Byte)')
-    plt.ylabel('Latency')
-    plt.scatter(size, mte, label="mte")
-    if(plot_no_mte):
-        plt.scatter(size, no_mte, label="no_mte")
-    plt.legend(fontsize=7)
-    plt.tight_layout(pad=0.1)
-    plt.savefig("./%s_%d.pdf" % (name, exp), dpi=300)
+    for s in data[-2][size][cpu]:
+        no_mte[s] = (np.mean(data[-2][size][cpu][s]), np.std(data[-2][size][cpu][s]))
 
-data = read_file("./exp3.txt")
-plot(data, "TearDown", 3)
+    print(sync_mte)
+    print(async_mte)
+    print(no_mte)
+
+data = read_file("./out.txt")
+
+plot(data, 0, 16777216)
+plot(data, 4, 16777216)
+plot(data, 8, 16777216)
 
