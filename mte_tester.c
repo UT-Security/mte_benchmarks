@@ -38,6 +38,14 @@
 # define PR_MTE_TAG_SHIFT       3
 # define PR_MTE_TAG_MASK        (0xffffUL << PR_MTE_TAG_SHIFT)
 
+#define set_tag(tagged_addr) do {                                      \
+        asm volatile("stg %0, [%0]" : : "r" (tagged_addr) : "memory"); \
+} while (0)
+
+#define read_tag(addr) do {                                      \
+        asm volatile("ldg %0, [%0]" : "+r" (addr) : : "memory"); \
+} while (0)
+
 static sigjmp_buf jmpbuf;
 
 /* volatile sig_atomic_t so it is safe in signal handler */
@@ -153,6 +161,47 @@ static void run_mode_test(const char *label, unsigned long prctl_mode_bits,
     }
 }
 
+static void run_evict_test(const char *label, unsigned long prctl_mode_bits,
+                          void *probe_ptr)
+{
+    int rcode, wcode;
+
+    unsigned long arg = PR_TAGGED_ADDR_ENABLE | prctl_mode_bits | (0xfffeUL << PR_MTE_TAG_SHIFT);
+
+    if (prctl(PR_SET_TAGGED_ADDR_CTRL, arg, 0, 0, 0) != 0) {
+        perror("prctl(PR_SET_TAGGED_ADDR_CTRL)");
+    }
+
+    printf("\n--- %s (evict test) ---\n", label);
+
+    size_t ps = sysconf(_SC_PAGESIZE);
+    unsigned long long size = 20000 * ps;
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_MTE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        perror("mmap(PROT_MTE)");
+        exit(1);
+    }
+
+    set_tag(probe_ptr); // probe_ptr is already tagged with 0x1.
+    void *new_ptr = tagged_ptr(probe_ptr, 0); // erase its pointer tag.
+
+    char *cp = p; // p is a large array, untagged.
+    for (int i = 0; i < size; i++) {
+        cp[i] = 'a' + i % 26;
+    }
+    
+    printf("before ldg %p\n", new_ptr);
+    read_tag(new_ptr); // ldg
+    if (new_ptr == probe_ptr) {
+        printf("tag read after long access : Working (old ptr=%p, new ptr=%p))\n", probe_ptr, new_ptr);
+    } else {
+        printf("tag read after long access : Failed (old ptr=%p, new ptr=%p))\n", probe_ptr, new_ptr);
+        printf("MTE support is not complete\n");
+    }
+    munmap(p, size);
+}
+
 int main(void)
 {
     unsigned long hwcap2 = getauxval(AT_HWCAP2);
@@ -189,6 +238,11 @@ int main(void)
                   probe,
                   SEGV_MTESERR,
                   SEGV_MTEAERR
+    );
+
+    run_evict_test("SYNC",
+                  PR_MTE_TCF_SYNC, /* TCF bits: sync */
+                  probe
     );
 
     return 0;
